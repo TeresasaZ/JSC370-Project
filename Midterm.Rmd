@@ -9,6 +9,8 @@ output:
     df_print: paged
 ---
 
+github repo link: https://github.com/TeresasaZ/JSC370-Project
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, eval = TRUE, results='hide', fig.show='hide', warning=FALSE, message=FALSE)
 ```
