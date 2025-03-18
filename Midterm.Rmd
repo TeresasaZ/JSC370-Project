@@ -1,0 +1,680 @@
+---
+title: "Midterm Report"
+author: "Tianhui Zhao"
+date: "2025-03-13"
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, eval = TRUE, results='hide', fig.show='hide', warning=FALSE, message=FALSE)
+```
+
+```{r eval=FALSE}
+install.packages("data.table")
+install.packages("patchwork")
+install.packages("gridExtra")
+install.packages("forcats")
+```
+
+```{r, echo=FALSE, eval=TRUE}
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(data.table)
+library(patchwork)
+library(gridExtra)
+library(ggplot2)
+library(forcats)
+```
+
+# Introduction #
+Urban traffic congestion is a critical issue in large metropolitan areas, impacting commuting efficiency, road safety, and environmental sustainability. Fuel prices are often considered a factor influencing driving behavior, as changes in gasoline costs can affect how frequently individuals use personal vehicles. This study examines how fluctuations in fuel prices influence traffic volume in Toronto. Since driving is a necessity for many individuals, especially in large countries like Canada where distances between destinations can be significant, an important question arises: **Would changes in fuel prices still affect the amount of car usage, given its essential nature?**
+
+For this analysis, two datasets were used:
+
+1.	Traffic Volume Data: This dataset was extracted from the Toronto Open Data Portal, providing detailed records of traffic volumes at various locations throughout the city, measured at 15-minute intervals.
+
+2.	Fuel Price Data: The fuel price dataset was retrieved from Open Canada, containing monthly fuel price information for major Canadian cities, including Toronto.
+
+The research question is:
+
+**How does fuel price affect traffic volume in Toronto?**
+
+# Methods #
+
+## Data Acquisition ##
+
+Traffic volume data was obtained via API extraction from the Toronto Open Data CKAN repository. The API requests returned CSV files containing detailed traffic counts, specific 15 min interval times, specific street locations, longitude and latitude. (2015-2019 traffic data and 2019-2024 traffic data were obtained separately).
+
+https://open.toronto.ca/dataset/traffic-volumes-midblock-vehicle-speed-volume-and-classification-counts/
+```{r}
+# Define API endpoint (replace {resource_id} with actual resource ID)
+resource_id <- "19499837-c088-448f-8c80-f210a75aecb4"
+api_url <- paste0("https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/traffic-volumes-midblock-vehicle-speed-volume-and-classification-counts/resource/", resource_id, "/download/svc_raw_data_volume_2015_2019.csv")
+
+# Send GET request
+response <- GET(api_url)
+dat_2018 <- fread(httr::content(response, as = "text"))
+```
+
+```{r}
+# Define the correct resource ID for the 2019-2024 volume dataset
+resource_id_2024 <- "8581f033-82ee-49fa-b18e-d112d92a6e7e"
+
+# Construct the API request URL
+api_url_2024 <- paste0("https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/traffic-volumes-midblock-vehicle-speed-volume-and-classification-counts/resource/", resource_id_2024, "/download/svc_raw_data_volume_2019_2024.csv")
+
+# Send the GET request
+response_2024 <- GET(api_url_2024)
+
+# Read the CSV data into R
+dat_traffic_2024 <- fread(httr::content(response_2024, as = "text"))
+
+# Print a summary to check the data
+print(head(dat_traffic_2024))
+```
+
+Fuel price data was sourced from Open Canada as a direct CSV download. The dataset includes date (monthly), fuel price of several major cities including Toronto, and whether the price is untaxed, taxed or total. 
+
+https://open.canada.ca/data/en/dataset/3ff1e1de-d665-4398-a12a-e8ce55f887ac/resource/af4537fc-1bf3-4b3a-b093-ebc633c2a21a
+```{r}
+api_url <- "https://ontario.ca/v1/files/fuel-prices/canadianpumppricesall.csv"
+fuel_prices <- fread(api_url)
+```
+
+## Data Cleaning ##
+
+Filtering Data: Traffic data from 2015–2024 was filtered to include only records from 2018 onward, ensuring alignment with fuel price records, which begin in 2018.
+```{r}
+dat_filtered <- dat_2018[time_start >= "2018-01-01 00:00:00"]
+
+# Check the filtered dataset
+summary(dat_filtered)
+head(dat_filtered)
+```
+
+```{r}
+colnames(dat_filtered)
+colnames(dat_traffic_2024)
+```
+
+Then, I combined the two traffic volume datasets to get a complete 2018-2024 traffic volume dataset.
+```{r}
+# Ensure both datasets have the same column names before merging
+dat_traffic_combined <- rbind(dat_filtered, dat_traffic_2024, fill = TRUE)
+
+# Check the first few rows
+head(dat_traffic_combined)
+
+```
+Handling Missing Values: Both traffic and pricing datasets were checked for missing values, empty strings, and "NULL" values. There were no missing values, so no need to make changes.
+```{r}
+# Exclude time_start, time_end, and date from checks
+non_date_columns_traffic <- dat_traffic_combined %>%
+  select(-c(time_start, time_end))
+
+non_date_columns_fuel <- fuel_prices %>%
+  select(-c(Date))
+
+# Check for NA values
+na_traffic <- colSums(is.na(non_date_columns_traffic))
+na_fuel <- colSums(is.na(non_date_columns_fuel))
+
+# Check for empty strings
+empty_string_traffic <- non_date_columns_traffic %>%
+  summarise_all(~ sum(. == "", na.rm = TRUE))
+
+empty_string_fuel <- non_date_columns_fuel %>%
+  summarise_all(~ sum(. == "", na.rm = TRUE))
+
+# Check for "NULL" stored as a string
+null_string_traffic <- non_date_columns_traffic %>%
+  summarise_all(~ sum(. == "NULL", na.rm = TRUE))
+
+null_string_fuel <- non_date_columns_fuel %>%
+  summarise_all(~ sum(. == "NULL", na.rm = TRUE))
+
+# Print results
+print("NA values in Traffic Data (Excluding Dates):")
+print(na_traffic)
+
+print("Empty String values in Traffic Data (Excluding Dates):")
+print(empty_string_traffic)
+
+print("NULL string values in Traffic Data (Excluding Dates):")
+print(null_string_traffic)
+
+print("NA values in Fuel Prices Data (Excluding Dates):")
+print(na_fuel)
+
+print("Empty String values in Fuel Prices Data (Excluding Dates):")
+print(empty_string_fuel)
+
+print("NULL string values in Fuel Prices Data (Excluding Dates):")
+print(null_string_fuel)
+
+# No null/empty strings/na values that need to be changed. No missing values.
+```
+
+Unique location names and direction from traffic dataset, and unique tax status from pricing dataset were also checked to ensure there were no string placeholders exist. Unique values from these string variables are normal. No placeholders exist.
+```{r}
+# Check unique values
+unique_location <- unique(dat_traffic_combined$location_name)
+print(unique_location)
+```
+```{r}
+unique_direction <- unique(dat_traffic_combined$direction)
+print(unique_direction)
+```
+```{r}
+unique_tax <- unique(fuel_prices$`Tax Status`)
+print(unique_tax)
+```
+```{r}
+unique_situation <- unique(fuel_prices$`Situation fiscale`)
+print(unique_situation)
+```
+
+## Data Exploration ##
+
+Check for import issues: I checked for import issues using dim(), head(), tail(), str() and summary() for both datasets. There were no issues by checking these tables. 
+Among the key variables, time start is of Date type, direction and tax status are of character type, and volume and fuel price are numeric.
+From summary(), I also made sure that there were no errors in numerical variables for both datasets.
+```{r}
+# Check for import issues
+dim(dat_traffic_combined)
+head(dat_traffic_combined)
+tail(dat_traffic_combined)
+str(dat_traffic_combined)
+```
+```{r}
+summary(dat_traffic_combined)
+```
+```{r}
+dim(fuel_prices)
+head(fuel_prices)
+tail(fuel_prices)
+str(fuel_prices)
+```
+```{r}
+summary(fuel_prices)
+```
+## Data Wrangling ##
+
+Traffic volume dataset only has time-related variable as `time_start` and `time_end`, which are two variables representing each 15-min interval observation. These two times are too specific as they include year, month, day, hour, minute and second. However, the pricing dataset only has a `Date` variable that represents the observation of fuel price per month (which are all on the first day of each month). Due to this situation, I created a `month` variable in each dataset and merged them by month. `month` is extracted from the dates or time from the two datasets.  
+```{r}
+# Extract year and month from time_start in dat_traffic_combined
+dat_traffic_combined <- dat_traffic_combined %>%
+  mutate(month = format(as.Date(time_start), "%Y-%m"))
+
+# Extract year and month from Date in fuel_prices
+fuel_prices <- fuel_prices %>%
+  mutate(month = format(as.Date(Date), "%Y-%m"))
+
+# Merge datasets based on month
+merged_data <- merge(dat_traffic_combined, fuel_prices, by = "month", all = FALSE, allow.cartesian = TRUE)
+
+# Check structure of merged data
+str(merged_data)
+
+```
+Although pricing data was observed monthly, observing traffic data in the same way would result in too few data points. So, I created a `actual_date` variable to extract the actual dates (year-month-day) traffic volumes were observed so I can observe daily data. 
+```{r}
+merged_data <- merged_data %>%
+  mutate(actual_date = as.Date(time_start))
+
+```
+
+```{r}
+date_range <- range(merged_data$month, na.rm = TRUE)
+
+# Print the result
+print(date_range)
+```
+By examining the number of unique locations per date and other details of the merged dataset using functions like `str()` and `unique()`, I found that each 15-minute interval includes different observation locations. These locations may overlap or vary, and the number of observed locations fluctuates. Additionally, within a single 15-minute interval, a street can be monitored from multiple directions. As a result, the number of observations per time interval varies due to differences in both the observed locations and the recorded directions. Therefore, I chose to analyze the average daily traffic volume. This approach ensures a sufficient number of data points while also accounting for discrepancies in the number of observations per time interval.
+
+```{r}
+location_count_per_date <- merged_data %>%
+  group_by(Date) %>%
+  summarize(unique_locations = n_distinct(location_name)) %>%
+  ungroup()
+
+# Print results
+print(location_count_per_date)
+```
+
+```{r}
+location_counts <- dat_traffic_combined %>%
+  mutate(date = as.Date(time_start)) %>%
+  group_by(date) %>%
+  summarise(unique_locations = n_distinct(location_name)) %>%
+  ungroup()
+
+# View the first few rows
+head(location_counts)
+
+# Plot the distribution of unique locations per date
+location_counts %>%
+  ggplot(aes(x = unique_locations)) + 
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution of Unique Locations per Date",
+       x = "Number of Unique Locations",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+```{r}
+interval_counts <- merged_data %>%
+  group_by(actual_date, location_name) %>%
+  summarise(recorded_intervals = n()) %>%
+  ungroup()
+
+# Display first few rows
+interval_counts
+
+```
+
+```{r}
+direction_counts <- merged_data %>%
+  group_by(actual_date) %>%
+  summarise(unique_directions = n_distinct(direction)) %>%
+  ungroup()
+
+# View distribution of unique direction counts
+ggplot(direction_counts, aes(x = unique_directions)) +
+  geom_histogram(bins = 4, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution of Unique Directions per Date",
+       x = "Number of Unique Directions",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+
+Before analyzing the dataset, I factored the three string variables: location name, direction and tax status. 
+
+```{r}
+merged_data <- merged_data %>%
+  mutate(
+    location_name = as.factor(location_name),
+    direction = as.factor(direction),
+    `Tax Status` = as.factor(`Tax Status`)  # Ensure backticks for column with space
+  )
+
+# Verify the structure of the modified columns
+str(merged_data$location_name)
+str(merged_data$direction)
+str(merged_data$`Tax Status`)
+```
+Lastly, it was unnecessary to retain all three fuel price categories—untaxed, taxed, and total. Therefore, I kept only the Total price, as it provides the most comprehensive representation of fuel costs.
+```{r}
+filtered_data <- merged_data %>%
+  filter(`Tax Status` == "Total")
+```
+
+
+# Preliminary Results #
+
+## 1. ## 
+This histogram provides an overview of the spread of average daily traffic volume. The distribution of traffic volume is bimodal, with one peak at around 10 and another peak around 100. Traffic volume observations range from 0 to approcimately 220.
+
+```{r, fig.show='show', fig.width=4, fig.height=3}
+avg_daily_vol_graph <- filtered_data %>%
+  group_by(actual_date) %>%
+  summarise(avg_daily_vol = mean(volume_15min, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot(avg_daily_vol_graph, aes(x = avg_daily_vol)) + 
+  geom_histogram(bins = 30, fill = "blue", alpha = 0.7) +
+  labs(title = "Distribution of Traffic Volume",
+       x = "Average Daily Volume",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+
+```{r}
+# Define a function to generate a histogram for each direction
+plot_histogram <- function(direction_filter) {
+  filtered_data %>%
+    filter(direction == direction_filter) %>%
+    ggplot(aes(x = volume_15min)) +
+    geom_histogram(bins = 50, fill = "blue", alpha = 0.7) +
+    labs(title = paste("Traffic Volume for", direction_filter),
+         x = "Traffic Volume",
+         y = "Frequency") +
+    theme_minimal()
+}
+
+# Generate individual plots for each direction
+plot_NB <- plot_histogram("NB")
+plot_SB <- plot_histogram("SB")
+plot_WB <- plot_histogram("WB")
+plot_EB <- plot_histogram("EB")
+
+# Arrange the four plots together in a 2x2 grid
+final_plot <- (plot_NB | plot_SB) / (plot_WB | plot_EB)
+
+# Display the final plot
+print(final_plot)
+
+```
+## 2. ##
+This figure shows how traffic volume in Toronto changed from 2018 to 2024. The graph appears rough due to gaps in data collection, but clear patterns emerge. Before 2019, traffic volume fluctuates with peaks around 150. A sharp decline occurs between 2020 and 2022, likely due to pandemic lockdowns reducing vehicle movement. After 2022, traffic volume rises sharply, suggesting recovery as restrictions ease. Despite missing observations, the trend indicates a pandemic-induced drop followed by a return to pre-pandemic levels.
+
+```{r, fig.show='show', fig.width=4, fig.height=3}
+daily_traffic <- filtered_data %>%
+  group_by(actual_date) %>%
+  summarize(avg_daily_volume = mean(volume_15min, na.rm = TRUE))
+
+ggplot(daily_traffic, aes(x = actual_date, y = avg_daily_volume)) +
+  geom_line(color = "blue") +
+  labs(title = "Average Daily Traffic Volume in Toronto",
+       x = "Date",
+       y = "Average Volume") +
+  theme_minimal()
+
+```
+
+## 3. ##
+This figure illustrates the average traffic volume for each day of the week, highlighting differences between weekday and weekend traffic. Traffic remains relatively stable from Monday to Friday, peaking on Friday. However, a noticeable decline occurs on weekends, with Sunday experiencing the lowest traffic volume. This suggests reduced commuting activity on weekends compared to weekdays.
+```{r, fig.show='show', fig.width=6, fig.height=3}
+by_day <- filtered_data %>%
+  mutate(weekday = weekdays(actual_date))
+
+weekly_traffic <- by_day %>%
+  group_by(weekday) %>%
+  summarize(avg_weekday_volume = mean(volume_15min, na.rm = TRUE)) %>%
+  mutate(weekday = factor(weekday, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
+
+ggplot(weekly_traffic, aes(x = weekday, y = avg_weekday_volume, fill = weekday)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Traffic Volume by Day of the Week",
+       x = "Day of the Week",
+       y = "Average Volume") +
+  theme_minimal()
+
+```
+
+```{r}
+by_day <- filtered_data %>%
+  mutate(weekday = factor(weekdays(actual_date), levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")))
+
+# Create the boxplot
+ggplot(by_day, aes(x = weekday, y = volume_15min, fill = weekday)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Reduce outlier visibility
+  labs(title = "Distribution of Traffic Volume by Day of the Week",
+       x = "Day of the Week",
+       y = "Traffic Volume (15 min interval)") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide legend since it's redundant
+```
+## 4. ##
+This scatterplot examines the relationship between fuel prices and daily average traffic volume directly, with a fitted trend line. The data points show no clear pattern, especially no potential trend indicating that traffic volume  significantly decrease as fuel prices rise. Even at the highest observed fuel price (~160), traffic volume can still peak around 200. The nearly horizontal trend line further suggests a weak or negligible correlation between fuel prices and traffic volume.
+
+```{r, fig.show='show', fig.width=6, fig.height=3}
+# Aggregate data to compute average 15-min volume per date
+avg_volume_per_date <- filtered_data %>%
+  group_by(actual_date) %>%
+  summarise(avg_volume_15min = mean(volume_15min, na.rm = TRUE),
+            fuel_price = mean(Toronto, na.rm = TRUE))  # Take the mean fuel price per date
+
+# Plot the relationship between fuel prices and average traffic volume per date
+ggplot(avg_volume_per_date, aes(x = fuel_price, y = avg_volume_15min)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(title = "Relationship Between Fuel Prices and Traffic Volume",
+       x = "Fuel Price (Toronto)",
+       y = "Average 15-Minute Traffic Volume per Date") +
+  theme_minimal()
+
+```
+
+```{r}
+correlation <- cor(avg_volume_per_date$fuel_price, avg_volume_per_date$avg_volume_15min, use = "complete.obs")
+print(paste("Correlation between fuel price and traffic volume:", round(correlation, 3)))
+```
+
+```{r}
+hour_data <- filtered_data %>%
+  mutate(hour = format(time_start, "%H"))
+
+hourly_traffic <- hour_data %>%
+  group_by(hour) %>%
+  summarize(avg_hourly_volume = mean(volume_15min, na.rm = TRUE))
+
+ggplot(hourly_traffic, aes(x = as.numeric(hour), y = avg_hourly_volume)) +
+  geom_line(color = "darkblue") +
+  labs(title = "Average Traffic Volume by Hour",
+       x = "Hour of the Day",
+       y = "Average Volume") +
+  theme_minimal()
+
+```
+
+```{r}
+top_locations <- filtered_data %>%
+  group_by(location_name) %>%
+  summarize(avg_volume = mean(volume_15min, na.rm = TRUE)) %>%
+  arrange(desc(avg_volume)) %>%
+  head(10)
+
+ggplot(top_locations, aes(x = reorder(location_name, -avg_volume), y = avg_volume, fill = location_name)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 10 Locations with Highest Traffic",
+       x = "Location",
+       y = "Average Volume") +
+  theme_minimal()
+
+```
+```{r}
+direction_traffic <- filtered_data %>%
+  group_by(direction) %>%
+  summarize(avg_direction_volume = mean(volume_15min, na.rm = TRUE))
+
+ggplot(direction_traffic, aes(x = direction, y = avg_direction_volume, fill = direction)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Traffic Volume by Direction",
+       x = "Direction",
+       y = "Average Volume") +
+  theme_minimal()
+
+```
+```{r}
+# Create the boxplot for traffic volume by direction
+ggplot(filtered_data, aes(x = direction, y = volume_15min, fill = direction)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Reduce outlier visibility
+  labs(title = "Distribution of Traffic Volume by Direction",
+       x = "Direction",
+       y = "Traffic Volume (15 min interval)") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide legend since it's redundant
+
+```
+## 5. ##
+This heatmap illustrates traffic volume variations by hour and day of the week. On weekdays, traffic is lowest before 6 AM and after 10 PM, with two peaks around 8 AM and 5 PM, aligning with typical commuting patterns. On weekends, traffic starts increasing later, around 8 AM, and declines after 7 PM. The lower traffic volume during weekday commuting hours on weekends suggests reduced commuting demand.
+
+```{r, fig.show='show', fig.width=6, fig.height=3}
+heat <- filtered_data %>%
+  mutate(hour = as.numeric(format(time_start, "%H")),
+         weekday = weekdays(actual_date))
+
+heatmap_data <- heat %>%
+  group_by(weekday, hour) %>%
+  summarize(avg_volume = mean(volume_15min, na.rm = TRUE)) 
+
+ggplot(heatmap_data, aes(x = hour, y = fct_relevel(weekday, c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")), fill = avg_volume)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightblue", high = "darkred") +
+  labs(title = "Traffic Volume Heatmap by Hour and Weekday",
+       x = "Hour of the Day",
+       y = "Day of the Week",
+       fill = "Avg Volume") +
+  theme_minimal()
+
+```
+
+```{r eval=FALSE}
+# Load required libraries
+library(leaflet)
+library(dplyr)
+
+# Step 1: Compute the average traffic volume per location
+location_map_data <- filtered_data %>%
+  group_by(location_name, latitude, longitude) %>%
+  summarise(avg_volume = mean(volume_15min, na.rm = TRUE)) %>%
+  ungroup()
+
+# Step 2: Create a Leaflet map
+leaflet(location_map_data) %>%
+  addTiles() %>%  # Add default OpenStreetMap tiles
+  addCircleMarkers(
+    lng = ~longitude, lat = ~latitude, 
+    radius = ~sqrt(avg_volume) * 1,  # Scale marker size based on avg traffic volume
+    color = "green", fill = TRUE, fillOpacity = 0.5,
+    popup = ~paste0("<b>Location:</b> ", location_name, 
+                    "<br><b>Avg Traffic Volume:</b> ", round(avg_volume, 2))
+  ) %>%
+  setView(lng = -79.3832, lat = 43.6532, zoom = 11)  # Center on Toronto
+
+```
+
+```{r}
+# Step 1: Filter for Toronto fuel prices with Tax Status = "Total"
+toronto_fuel <- fuel_prices %>%
+  filter(`Tax Status` == "Total") %>%
+  select(Date, Toronto)  # Select relevant columns
+
+# Step 2: Convert Date to proper format
+toronto_fuel$Date <- as.Date(toronto_fuel$Date)
+
+# Step 3: Create a time-series plot of Toronto fuel prices
+ggplot(toronto_fuel, aes(x = Date, y = Toronto)) +
+  geom_line(color = "blue", size = 1) +  # Line plot
+  geom_smooth(method = "loess", se = FALSE, color = "red", linetype = "dashed") +  # Trend line
+  labs(title = "Toronto Fuel Price Trend Over Time",
+       x = "Date",
+       y = "Fuel Price (CAD per liter)",
+       caption = "Data Source: Open Canada Fuel Prices") +
+  theme_minimal()
+```
+
+```{r}
+# non-average traffic volume data for personal exploration only, not for grading!!!
+
+# Pearson correlation (linear relationship)
+cor.test(filtered_data$Toronto, filtered_data$volume_15min, method = "pearson")
+
+# Spearman correlation (if relationship is not linear)
+# cor.test(filtered_data$Toronto, filtered_data$volume_15min, method = "spearman")
+
+```
+
+```{r}
+# non-average traffic volume data for personal exploration only, not for grading!!!
+
+# Create a categorical variable: High vs. Low fuel price
+median_price <- median(filtered_data$Toronto, na.rm = TRUE)
+
+filtered_data <- filtered_data %>%
+  mutate(fuel_category = ifelse(Toronto > median_price, "High Price", "Low Price"))
+
+# Perform t-test
+t.test(volume_15min ~ fuel_category, data = filtered_data)
+
+```
+
+```{r}
+# non-average traffic volume data for personal exploration only, not for grading!!!
+
+# Fit a simple linear regression model
+lm_model <- lm(volume_15min ~ Toronto, data = filtered_data)
+summary(lm_model)
+
+```
+
+```{r}
+# non-average traffic volume plot for personal exploration only, not for grading!!!
+
+library(ggplot2)
+
+ggplot(filtered_data, aes(x = Toronto, y = volume_15min)) +
+  geom_point(alpha = 0.5, color = "blue") +  # Scatter points
+  geom_smooth(method = "lm", color = "red", se = FALSE) +  # Linear trendline
+  labs(
+    title = "Relationship Between Fuel Prices and Traffic Volume",
+    x = "Fuel Price (Toronto)",
+    y = "Traffic Volume (15-min Interval)"
+  ) +
+  theme_minimal()
+
+```
+
+## 6. ##
+The correlation value of -0.0200 suggests an extremely weak negative relationship between fuel prices and average traffic volume, implying that traffic volume is unlikely to be significantly affected by fuel price fluctuations. However, when fuel prices are categorized as high or low based on the median and analyzed using a t-test, the p-value of 0.0152 (below the 0.05 threshold) indicates statistically significant evidence that traffic volume differs between the two pricing categories.
+
+```{r}
+# Step 1: Aggregate average traffic volume per day
+daily_traffic <- filtered_data %>%
+  group_by(actual_date) %>%
+  summarize(avg_daily_volume = mean(volume_15min, na.rm = TRUE))
+
+# Step 2: Aggregate fuel price per day
+daily_fuel_price <- filtered_data %>%
+  group_by(actual_date) %>%
+  summarize(avg_fuel_price = mean(Toronto, na.rm = TRUE))  # Take mean price per day
+
+# Step 3: Merge the two datasets by actual_date
+merged_daily_data <- merge(daily_traffic, daily_fuel_price, by = "actual_date", all = FALSE)
+
+# Step 4: Categorize fuel price into High and Low groups based on median
+median_fuel_price <- median(merged_daily_data$avg_fuel_price, na.rm = TRUE)
+
+merged_daily_data <- merged_daily_data %>%
+  mutate(fuel_category = ifelse(avg_fuel_price > median_fuel_price, "High Price", "Low Price"))
+```
+
+
+```{r, results='show'}
+# Compute Pearson correlation
+correlation_value <- cor(avg_volume_per_date$fuel_price, avg_volume_per_date$avg_volume_15min, use = "complete.obs")
+
+# Perform T-test
+t_test_result <- t.test(avg_daily_volume ~ fuel_category, data = merged_daily_data)
+
+# Create a data frame to store results
+stats_table <- data.frame(
+  Statistic = c("Pearson Correlation", "T-test p-value"),
+  Value = c(
+    round(correlation_value, 3),
+    round(t_test_result$p.value, 5)
+  )
+)
+
+# Print the table using knitr::kable()
+knitr::kable(stats_table, caption = "Summary of Statistical Tests: Correlation and T-test Results")
+```
+
+# Summary #
+
+The correlation analysis indicates an extremely weak negative relationship between fuel price and traffic volume. However, when fuel prices are categorized into high and low, a t-test reveals a statistically significant difference in traffic volume between the two pricing groups.
+
+Additionally, two key findings emerge from the exploratory analysis:
+
+1. Weekday-weekend traffic patterns differ significantly, with noticeable peaks during commuting hours on weekdays, while weekend traffic follows a different pattern (as observed in the heatmap and boxplot).
+
+2. Traffic volume dropped sharply during the pandemic, suggesting a strong external influence on travel behavior (as seen in the line graph).
+
+Based on these insights, my next steps are:
+
+1. Fit splines to model the effect of fuel pricing numerically and capture potential non-linear relationships.
+
+2. If splines prove ineffective, categorize fuel prices to better illustrate traffic volume differences.
+
+3. Incorporate weekday-weekend differences as a factor when constructing a predictive model for traffic volume.
+
+4. If feasible, introduce the pandemic as a random event effect in the overall model to account for its impact on traffic trends. 
